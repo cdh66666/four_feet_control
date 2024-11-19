@@ -10,7 +10,7 @@ fullPath = genpath('unitree_stl');
 addpath(fullPath)
 
 % 设置要运行的 slx 文件路径
-slxFileName = 'Copy_of_four_feet_simple_cdh.slx'; 
+slxFileName = 'four_feet_control_VMC.slx'; 
 
 % 直接调用 open 函数并将输出重定向到临时变量，避免阻塞
 tmp = open(slxFileName);
