@@ -1,7 +1,13 @@
 clear;
 clc;
  
- 
+global T beta Tf Ts M g simulink_step force_threshold L W H l1 l2 l3 floor_x floor_y floor_h z_init h_init damping stiff friction_v friction_p VMC_PID_P VMC_PID_D hd Ktd K_z K_vx K_vy K_vz K_wx K_wy K_wz;
+global t S;
+
+%摆动相运行时间
+t=0;
+%状态机状态
+S=-
 % 步态周期 T/s
 T = 1;
 % 摆动相占空比 beta
@@ -29,7 +35,9 @@ l3 = 0.2;%腿部连杆3长度
 floor_x = 2;%地面长
 floor_y = 2;%地面宽
 floor_h= 0.05;%地面高
-% 腿部初始保持高度&一开始离地高度
+% 一开始离地高度
+z_init = 0.4;
+%腿部初始保持高度
 h_init = 0.35;
 damping = 10;%接触阻尼
 stiff =10000;%接触高度

@@ -17,23 +17,22 @@
 
 function F = VMC_Trot_Control(x)
 
-global T beta Tf Ts M g simulink_step force_threshold L W H l1 l2 l3 floor_x floor_y floor_h z_init h_init damping stiff friction_v friction_p VMC_PID_P VMC_PID_D hd Ktd K_z K_vx K_vy K_vz K_wx K_wy K_wz;
-global t S state_vars error_prev_matrix p_init_swing state_d stop_time;
+global  t S force_threshold state_vars state_d simulink_step error_prev_matrix
 
 % %传入参数分割
-status = x(1:6);
-force = x(7:10);
-pos = x(11:22);
+status = x(1:6)
+force = x(7:10)
+pos = x(11:22)
  
 % 提取加速度和角速度状态信息
-[ax, ay, az, wx, wy, wz] = extract_status(status);
+[ax, ay, az, wx, wy, wz] = extract_status(status)
 % 通过矩阵运算更新状态变量（速度和角度）
-state_vars = update_state_vars(state_vars, [ax; ay; az; wx; wy; wz], simulink_step);
-[vx, vy, vz, roll, pitch, yaw] = extract_status(state_vars);
+state_vars = update_state_vars(state_vars, [ax; ay; az; wx; wy; wz], simulink_step)
+[vx, vy, vz, roll, pitch, yaw] = extract_status(state_vars)
 %提取期望机体速度和偏转角度状态信息
-[vxd, vyd, vzd, rolld, pitchd, yawd] = extract_status(state_d);
+[vxd, vyd, vzd, rolld, pitchd, yawd] = extract_status(state_d)
 % 处理足端受力及位置信息 
-[fz, onfloor_matrix, pos_matrix] = process_foot_force_and_position(force, pos,force_threshold);
+[fz, onfloor_matrix, pos_matrix] = process_foot_force_and_position(force, pos,force_threshold)
 
  
 % 更新计时时间 
@@ -42,7 +41,7 @@ t = t + simulink_step;
 % 计算整体足端受力中心位置（示例计算，根据实际需求调整）
 [total_force, weighted_positions, center_of_force] = calculate_force_center(fz, pos_matrix, onfloor_matrix);
 % 获取状态转移规则矩阵并更新整体状态 S
-[S,t] = update_state(S,t, onfloor_matrix)
+[S,t] = update_state(S, onfloor_matrix);
 
 % 根据状态 S 判断并计算相关变量
 if S == -1
@@ -61,7 +60,7 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % 处理四足腾空相的子函数
-function [F, error_prev_matrix] = handle_four_feet_airborne(pos_matrix,error_prev_matrix)
+function [F, error_prev_matrix] = handle_four_feet_airborne(error_prev_matrix, pos_matrix)
     global  VMC_PID_P VMC_PID_D L W h_init
     % 四足腾空相时四条腿的初始位置矩阵，直接构建，避免逐个变量赋值
     P_INIT = [L / 2, -L / 2, -L / 2, L / 2; (W + 0.1) / 2, (W + 0.1) / 2, -(W + 0.1) / 2, -(W + 0.1) / 2; -h_init, -h_init, -h_init, -h_init].';
@@ -82,40 +81,25 @@ function [total_force, weighted_positions, center_of_force] = calculate_force_ce
     center_of_force = sum(weighted_positions, 1)./ total_force; % 计算受力中心位置（对应元素相除）
 end
 
-% 定义状态转移规则矩阵构建函数（增强可扩展性和代码结构清晰度）
-function transition_matrix = build_transition_rules()
-    transition_matrix = [
-        0, 0, 0, 0, -1, -1;  % 四足腾空相，从任意状态转移到 -1（这里重复 -1 只是为了格式统一，实际判断时只要满足前面的触地状态条件即可）
-        1, 1, 1, 1, -1, 0;   % 初始化并且全部触地，从 -1 状态转移到 0
-        0, 1, 0, 1, 0, 2;    % 抬腿 A 组并且全部 A 组离地，从 0 状态转移到 2
-        1, 1, 1, 1, 2, 1;    % A 组全部着地，从 2 状态转移到 1
-        1, 0, 1, 0, 1, 3;    % 抬腿 B 组并且全部 B 组离地，从 1 状态转移到 3
-        1, 1, 1, 1, 3, 0     % B 组全部着地，从 3 状态转移到 0
-    ];
-end
-
-
 % 更新状态的子函数（包括获取状态转移规则矩阵和根据触地情况更新状态）
-function [new_S,new_t]= update_state(S, t,onfloor_matrix)
+function [S,t]= update_state(S, onfloor_matrix)
     transition_rules = build_transition_rules();
-    new_t = t;
-    new_S = S;
+
     % 先单独判断四足腾空相情况
     if ~any(onfloor_matrix(:))
-        new_t =0;
-        new_S = -1;
+        t =0;
+        S = -1;
     else
         % 遍历规则矩阵判断其他转移情况
         for i = 1:size(transition_rules, 1)
             if all(onfloor_matrix == transition_rules(i, 1:4), 'all') && S == transition_rules(i, 5)
-                new_S = transition_rules(i, 6);
-                new_t =0;
+                S = transition_rules(i, 6);
+                t =0;
                 break;
             end
         end
     end
 end
-
 
 
 
