@@ -1,5 +1,5 @@
 
-% % fcn 函数功能描述：
+% % VMC_Trot_Control 函数功能描述：
 % % 该函数根据输入的状态（status）、足端受力（force）以及足端位置（pos）信息，进行一系列计算，
 % % 包括判断足端触地状态、根据状态转移规则更新整体状态、计算运动相关物理量（速度、位置误差等），
 % % 最终通过 PD 控制计算四条腿对应的力（以矩阵 F 返回）。
@@ -15,14 +15,15 @@
 % % 腿部顺序为：左前 - 左后 - 右前 - 右后，所有传入传出的参数都是按照这个顺序来的
 % % 声明持久变量，用于在多次函数调用间保持状态
 
-function F = VMC_Trot_Control(x)
+function combined_matrix = VMC_Trot_Control(x)
 
 global T beta Tf Ts M g simulink_step force_threshold L W H l1 l2 l3 floor_x floor_y floor_h z_init h_init damping stiff friction_v friction_p VMC_PID_P VMC_PID_D hd Ktd K_z K_vx K_vy K_vz K_wx K_wy K_wz;
-global t S state_vars error_prev_matrix p_init_swing state_d stop_time status;
+global t S state_vars error_prev_matrix p_init_swing state_d stop_time status desired_positions;
 
 % %传入参数分割
 status = x(1:6);
 force = x(7:10);
+
 pos = x(11:22);
  
 % 提取加速度和角速度状态信息
@@ -50,37 +51,121 @@ else
     % 判断当前是哪组腿摆动、哪组腿支撑，并进行相应计算
       %4行3列对应四条腿及三维力向量
 %       F = zeros(4,3);
-    [F] = handle_leg_phases(pos_matrix);
+    [F] = handle_leg_phases(pos_matrix,onfloor_matrix);
+
 end
-  
+
+% % 对F的每个元素进行限幅处理
+% F = max(min(F, 27), -27);
+
+  % 合并pos_matrix和F为一个(8, 3)的矩阵
+combined_matrix = zeros(8, 3);
+combined_matrix(1:4, :) = desired_positions;
+combined_matrix(5:8, :) = F;
+combined_matrix(9, :) = [S x(7) x(8)];
+combined_matrix(10, :) = [x(9) x(10) t];
+combined_matrix(11, :) = onfloor_matrix(1:3);
+combined_matrix(12, :) = [onfloor_matrix(4),S,0];
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
 % 根据状态判断并处理腿部摆动相和支撑相的通用子函数
-function [F] = handle_leg_phases(pos_matrix)
+function [F] = handle_leg_phases(pos_matrix,onfloor_matrix)
     global  S;
    
     % 获取当前处于摆动相和支撑相的腿的索引（根据状态转移规则确定）
     [swing_leg_indices, stance_leg_indices] = determine_leg_phases(S);
 
     % 分别处理摆动相和支撑相的腿
-    [F_swing] = handle_swing_legs(pos_matrix,swing_leg_indices);
-    [F_stance] = handle_stance_legs(pos_matrix,stance_leg_indices);
-    
-    F = zeros(4,3);
-   
-    %将摆动相腿的力按顺序赋值到F中
-    F(swing_leg_indices(1), :) = F_swing(swing_leg_indices(1), :);
-    F(swing_leg_indices(2), :) = F_swing(swing_leg_indices(1), :);
-    %将支撑相腿的力按顺序赋值到F中
-    F(stance_leg_indices(1), :) = F_stance(stance_leg_indices(1), :);
-    F(stance_leg_indices(2), :) = F_stance(stance_leg_indices(1), :);
+    [F_swing] = handle_swing_legs(pos_matrix,swing_leg_indices,stance_leg_indices,onfloor_matrix);
+    F = F_swing;
+%     [F_stance] = handle_stance_legs(pos_matrix,stance_leg_indices);
+%     
+% 
+% 
+%  
+%     F = zeros(4,3);
+%    
+%     %将摆动相腿的力按顺序赋值到F中
+%     F(swing_leg_indices(1), :) = F_swing(swing_leg_indices(1), :);
+%     F(swing_leg_indices(2), :) = F_swing(swing_leg_indices(2), :);
+%     %将支撑相腿的力按顺序赋值到F中
+%     F(stance_leg_indices(1), :) = F_stance(stance_leg_indices(1), :);
+%     F(stance_leg_indices(2), :) = F_stance(stance_leg_indices(2), :);
 
  
 end
 
+ 
+% 处理摆动相腿的子函数（通用，同时考虑传入的对应腿的数据）
+function [F_swing] = handle_swing_legs(pos_matrix,swing_leg_indices,stance_leg_indices,onfloor_matrix)
+    global error_prev_matrix  p_init_swing state_vars state_d t VMC_PID_P VMC_PID_D;
+    global Ts K_vy Tf Ktd hd S desired_positions
+    [vx, vy, vz, roll, ~, yaw] = extract_status(state_vars);
+    %提取期望机体速度和偏转角度状态信息
+    [vxd, vyd, vzd, rolld, pitchd, yawd] = extract_status(state_d);
+
+    num_swing_legs = size(pos_matrix(swing_leg_indices,:), 1);
+    % 初始化期望位置矩阵
+    desired_positions = pos_matrix;
+
+    for i = 1:1:num_swing_legs
+        % 仅在 t == 0 时为每条摆动腿赋初始值
+        if t == 0
+            p_init_swing(swing_leg_indices(i),:) = pos_matrix(swing_leg_indices(i),:);
+            p_init_swing(stance_leg_indices(i),:) = pos_matrix(stance_leg_indices(i),:);
+        end
+
+        % 使用每条腿独立的初始值
+        x_init = p_init_swing(swing_leg_indices(i),1);
+        y_init = p_init_swing(swing_leg_indices(i),2);
+        z_init = p_init_swing(swing_leg_indices(i),3);
+
+        % x 方向落足点距离（可根据实际情况调整每条腿的期望速度等，这里简化为相同计算方式）
+        xf = vxd * Ts / 2;
+        % y 方向落足点距离
+        yf = vyd * Ts / 2 + K_vy * (vyd - vy);
+        % 判断是否超过运行时间
+        if (t > Tf)
+            deta_t = t - Tf;
+            phi = 2 * pi;
+            Xf = xf + x_init;
+            Yf = yf + y_init;
+        else % 在轨迹规划时间内
+            deta_t = 0;
+            phi = 2 * pi * t / Tf;
+            Xf = xf * (phi - sin(phi)) / (2 * pi) + x_init;
+            Yf = yf * (phi - sin(phi)) / (2 * pi) + y_init;
+        end
+
+        % 考虑足端轨迹延伸下探（加入 Ktd*(deta_t) 项）
+        Zf = hd * (1 - cos(phi)) / 2 + z_init - Ktd * (deta_t);
+
+ 
+        % 填充期望位置矩阵
+ 
+        desired_positions(swing_leg_indices(i), 1) = Xf;
+        desired_positions(swing_leg_indices(i), 2) = Yf;
+        desired_positions(swing_leg_indices(i), 3) = Zf;
+        desired_positions(stance_leg_indices(i), :) = p_init_swing(stance_leg_indices(i),:) ;
+ 
+ 
+
+ 
+    end
+    
+    % 计算位置误差矩阵，利用矩阵减法一次性计算四条腿的误差
+    error_matrix = desired_positions - pos_matrix;
+    % 计算误差变化量矩阵，利用矩阵减法
+    d_error_matrix = error_matrix - error_prev_matrix;
+    % 更新上一次的误差值矩阵，用于下一次计算
+    error_prev_matrix = error_matrix;
+    % PD 控制计算力矩阵，利用矩阵乘法和加法一次性计算四条腿的力
+    F_swing = VMC_PID_P * error_matrix + VMC_PID_D * d_error_matrix;
+
+end
 
 function [F_stance] = handle_stance_legs(pos_matrix,stance_leg_indices)
     global hd state_vars state_d  M g status K_wx K_wy K_wz K_roll K_pitch2 K_vx K_h K_h_dot
@@ -149,68 +234,6 @@ end
 
  
 
- 
-% 处理摆动相腿的子函数（通用，同时考虑传入的对应腿的数据）
-function [F_swing] = handle_swing_legs(pos_matrix,swing_leg_indices)
-    global error_prev_matrix  p_init_swing state_vars state_d t VMC_PID_P VMC_PID_D;
-    global Ts K_vy Tf Ktd hd
-    [vx, vy, vz, roll, pitch, yaw] = extract_status(state_vars);
-    %提取期望机体速度和偏转角度状态信息
-    [vxd, vyd, vzd, rolld, pitchd, yawd] = extract_status(state_d);
-
-    num_swing_legs = size(pos_matrix(swing_leg_indices,:), 1);
-    % 初始化期望位置矩阵
-    desired_positions = pos_matrix;
-
-    for i = 1:1:num_swing_legs
-        % 仅在 t == 0 时为每条摆动腿赋初始值
-        if t == 0
-            p_init_swing(swing_leg_indices(i),:) = pos_matrix(swing_leg_indices(i),:);
-        end
-        % 使用每条腿独立的初始值
-        x_init = p_init_swing(swing_leg_indices(i),1);
-        y_init = p_init_swing(swing_leg_indices(i),2);
-        z_init = p_init_swing(swing_leg_indices(i),3);
-
-        % x 方向落足点距离（可根据实际情况调整每条腿的期望速度等，这里简化为相同计算方式）
-        xf = vxd * Ts / 2;
-        % y 方向落足点距离
-        yf = vyd * Ts / 2 + K_vy * (vyd - vy);
-        % 判断是否超过运行时间
-        if (t > Tf)
-            deta_t = t - Tf;
-            phi = 2 * pi;
-            Xf = xf + x_init;
-            Yf = yf + y_init;
-        else % 在轨迹规划时间内
-            deta_t = 0;
-            phi = 2 * pi * t / Tf;
-            Xf = xf * (phi - sin(phi)) / (2 * pi) + x_init;
-            Yf = yf * (phi - sin(phi)) / (2 * pi) + y_init;
-        end
-
-        % 考虑足端轨迹延伸下探（加入 Ktd*(deta_t) 项）
-        Zf = hd * (1 - cos(phi)) / 2 + z_init - Ktd * (deta_t);
-
-        % 填充期望位置矩阵
- 
-        desired_positions(swing_leg_indices(i), 1) = Xf;
-        desired_positions(swing_leg_indices(i), 2) = Yf;
-        desired_positions(swing_leg_indices(i), 3) = Zf;
- 
-    end
-
-    % 计算位置误差矩阵，利用矩阵减法一次性计算四条腿的误差
-    error_matrix = desired_positions - pos_matrix
-    % 计算误差变化量矩阵，利用矩阵减法
-    d_error_matrix = error_matrix - error_prev_matrix
-    % 更新上一次的误差值矩阵，用于下一次计算
-    error_prev_matrix = error_matrix
-    % PD 控制计算力矩阵，利用矩阵乘法和加法一次性计算四条腿的力
-    F_swing = VMC_PID_P * error_matrix + VMC_PID_D * d_error_matrix
-
-end
-
 
 % 根据状态确定摆动相和支撑相腿的索引的子函数
 function [swing_leg_indices, stance_leg_indices] = determine_leg_phases(S)
@@ -241,25 +264,24 @@ end
 
 % 处理四足腾空相的子函数
 function [F] = handle_four_feet_airborne(pos_matrix)
-    global  VMC_PID_P VMC_PID_D L W h_init error_prev_matrix
+    global  VMC_PID_P VMC_PID_D L W h_init error_prev_matrix desired_positions
     % 四足腾空相时四条腿的初始位置矩阵，直接构建，避免逐个变量赋值
-    P_INIT = [L / 2, -L / 2, -L / 2, L / 2; (W + 0.1) / 2, (W + 0.1) / 2, -(W + 0.1) / 2, -(W + 0.1) / 2; -h_init, -h_init, -h_init, -h_init].';
+    desired_positions = [L / 2, -L / 2, -L / 2, L / 2; (W + 0.15) / 2, (W + 0.15) / 2, -(W + 0.15) / 2, -(W + 0.15) / 2; -h_init, -h_init, -h_init, -h_init].';
     % 计算位置误差矩阵，利用矩阵减法一次性计算四条腿的误差
-    error_matrix = P_INIT - pos_matrix;
+    error_matrix = desired_positions - pos_matrix;
     % 计算误差变化量矩阵，利用矩阵减法
     d_error_matrix = error_matrix - error_prev_matrix;
     % 更新上一次的误差值矩阵，用于下一次计算
     error_prev_matrix = error_matrix;
     % PD 控制计算力矩阵，利用矩阵乘法和加法一次性计算四条腿的力
     F = VMC_PID_P * error_matrix + VMC_PID_D * d_error_matrix;
+ 
 end
-
  
 
 % 定义状态转移规则矩阵构建函数（增强可扩展性和代码结构清晰度）
 function transition_matrix = build_transition_rules()
     transition_matrix = [
-        0, 0, 0, 0, -1, -1;  % 四足腾空相，从任意状态转移到 -1（这里重复 -1 只是为了格式统一，实际判断时只要满足前面的触地状态条件即可）
         1, 1, 1, 1, -1, 0;   % 初始化并且全部触地，从 -1 状态转移到 0
         0, 1, 0, 1, 0, 2;    % 抬腿 A 组并且全部 A 组离地，从 0 状态转移到 2
         1, 1, 1, 1, 2, 1;    % A 组全部着地，从 2 状态转移到 1
@@ -271,24 +293,29 @@ end
 
 % 更新状态的子函数（包括获取状态转移规则矩阵和根据触地情况更新状态）
 function [new_S]= update_state(S,onfloor_matrix)
-    global t;
+    global t  ;
     transition_rules = build_transition_rules();
+ 
     new_S = S;
     % 先单独判断四足腾空相情况
-    if ~any(onfloor_matrix(:))
+    if (onfloor_matrix(1) == 0 &&  onfloor_matrix(2) == 0 && onfloor_matrix(3) == 0 && onfloor_matrix(4) == 0 )
         t =0; %摆动相时间清零
         new_S = -1;
+ 
     else
         % 遍历规则矩阵判断其他转移情况
         for i = 1:size(transition_rules, 1)
-            if all(onfloor_matrix == transition_rules(i, 1:4), 'all') && S == transition_rules(i, 5)
+            if (all(onfloor_matrix == transition_rules(i, 1:4), 'all') && S == transition_rules(i, 5))
                 new_S = transition_rules(i, 6);
+ 
                 if(new_S == 0 || new_S == 1 )
                     t =0;%更新状态，摆动相时间清零
                 end
-                break;
+
+
             end
         end
+ 
     end
 end
 
@@ -308,7 +335,7 @@ function [fz, onfloor_matrix, pos_matrix] = process_foot_force_and_position(forc
     fz = reshape(force([1, 2,3,4]), [], 1);
 
     % 通过矩阵比较判断足端受力是否大于阈值，如大于则表示触地，转换为数值矩阵（0 或 1）表示触地状态
-    onfloor_matrix = double(fz > force_threshold);
+    onfloor_matrix = double(fz > force_threshold).';
 
     % 将足端位置赋值并重塑为合适的矩阵形式（num_legs 行 3 列，这里 num_legs = 4）
     pos_matrix = reshape(pos, 3, []).';

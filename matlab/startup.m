@@ -2,11 +2,13 @@ clear;
 clc;
  
 global T beta Tf Ts M g simulink_step force_threshold L W H l1 l2 l3 floor_x floor_y floor_h z_init h_init damping stiff friction_v friction_p VMC_PID_P VMC_PID_D hd Ktd K_z K_vx K_vy K_vz K_wx K_wy K_wz;
-global t S state_vars error_prev_matrix p_init_swing state_d stop_time status K_roll K_pitch2 K_vx K_h K_h_dot;
+global t S state_vars error_prev_matrix desired_positions p_init_swing state_d delay_time delay_time_init stop_time status K_roll K_pitch2 K_vx K_h K_h_dot;
 % 初始化上一次的误差值矩阵，初始化为全零矩阵，维度为 (4, 3)，对应四条腿，每个腿的误差是三维向量
 error_prev_matrix = zeros(4, 3);
 % 初始化每条摆动腿的起始位置坐标（初始化为对应维度的全零矩阵，后续在 t == 0 时赋值）
 p_init_swing = zeros(4, 3);
+%期望坐标矩阵
+desired_positions = zeros(4, 3);
 %三轴加速度和三轴角速度
 status = zeros(6, 1);
 % 初始化状态变量矩阵，包含速度和角度信息，维度为 (6, 1)，分别对应 [vx; vy; vz; roll; pitch; yaw]
@@ -28,13 +30,16 @@ Ts = T - Tf;
 %仿真停止时间
 stop_time = 3;
 % 机体质量，单位：kg
-M = 6,4;
+M = 6;
 % 重力加速度
 g = 9.8;
 % 仿真时间步长
-simulink_step = 1e-3;
+simulink_step = 1e-5;
 % 足端受力阈值
 force_threshold = 10;
+% 延时时间,单位：ms
+delay_time_init = 1;
+delay_time =0;
 % 定义常量
 L = 0.365;  %机体长度
 W = 0.1;    %机体宽度
@@ -49,13 +54,15 @@ floor_h= 0.05;%地面高
 z_init = 0.5;
 %腿部初始保持高度
 h_init = 0.35;
-damping = 100;%接触阻尼
+damping = 10;%接触阻尼
 stiff =10000;
 friction_v = 0.5;%动摩擦系数
-friction_p =0.7;%静摩擦系数
+friction_p =0.5;%静摩擦系数
 % VMC 力位混合控置 PD 参数
-VMC_PID_P = 250;
-VMC_PID_D = 0;
+VMC_PID_P = 2500;
+VMC_PID_D = 7500;
+ 
+
  
 theta0_init = 0;
 theta1_init = 45;
@@ -65,7 +72,7 @@ theta2_init = -75;
 % 抬腿高度
 hd = 0.1; % 单位：m
 % 足端下探速度
-Ktd = 0.1;
+Ktd = 0;
  
  
 K_vx = 0; % 控制前进速度系数，需根据实际调试确定合适值
