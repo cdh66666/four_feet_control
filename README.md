@@ -1,8 +1,6 @@
 # four_feet_control
  # matlab四足机器人VMC控制器 - 2024年11月19日
 
-![matlab仿真运行界面](image/README/matlab仿真运行界面)
+-  在matlab中打开./matlab/startup.m文件并点击运行，即可看到仿真效果。
 
-![VMC_Trot控制控制代码](image/README/VMC_Trot控制控制代码)
-
-![matlab代码控制](image/README/matlab代码控制)
+   [VMC_Trot控制控制代码](image\README\VMC_Trot控制控制代码) 
