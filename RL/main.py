@@ -1,9 +1,5 @@
 import gym
 
-from gym.utils.env_checker import check_env
-
-
-
 
 env = gym.make("LunarLander-v2",render_mode="human")
 env.action_space.seed(42)
